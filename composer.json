@@ -1,0 +1,26 @@
+{
+	"name": "tsubu/gatherpress-schema",
+	"description": "Schema.org Event structured data for GatherPress events.",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=8.1"
+	},
+	"require-dev": {
+		"dealerdirect/phpcodesniffer-composer-installer": "*",
+		"wp-coding-standards/wpcs": "^3.1",
+		"phpcompatibility/phpcompatibility-wp": "*",
+		"phpunit/phpunit": "^9.6",
+		"yoast/phpunit-polyfills": "^2.0",
+		"wp-phpunit/wp-phpunit": "*",
+		"szepeviktor/phpstan-wordpress": "^2.0"
+	},
+	"config": {
+		"platform": {
+			"php": "8.1.99"
+		},
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		}
+	}
+}

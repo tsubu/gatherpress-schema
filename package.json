@@ -1,0 +1,16 @@
+{
+	"name": "gatherpress-schema",
+	"version": "0.1.0",
+	"description": "Schema.org Event structured data for GatherPress events.",
+	"license": "GPL-2.0-or-later",
+	"private": true,
+	"scripts": {
+		"lint:php": "vendor/bin/phpcs",
+		"lint:phpstan": "vendor/bin/phpstan analyze --memory-limit=1G",
+		"test:unit:php": "wp-env run tests-cli --env-cwd=wp-content/plugins/gatherpress-schema vendor/bin/phpunit",
+		"wp-env": "wp-env"
+	},
+	"devDependencies": {
+		"@wordpress/env": "^12.0.0"
+	}
+}
