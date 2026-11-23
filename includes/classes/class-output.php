@@ -19,9 +19,13 @@ use GatherPress\Core\Traits\Singleton;
  * Puts the Event on the page of a single event, in one place only, so a page
  * never has two competing Event entities:
  *
- * - With Yoast SEO, the Event joins Yoast's schema graph.
- * - With Rank Math, the Event joins Rank Math's JSON-LD.
- * - With neither, the plugin prints its own JSON-LD in the head.
+ * - When Yoast SEO builds its schema graph, the Event joins it.
+ * - When Rank Math builds its JSON-LD, the Event joins it.
+ * - Otherwise the plugin prints its own JSON-LD in the head.
+ *
+ * What counts is whether an SEO plugin built its schema on this page, not
+ * whether it is active. Rank Math before its setup wizard, or Yoast SEO with
+ * its schema turned off, builds none, and then the plugin prints its own.
  *
  * @since 0.1.0
  */
@@ -42,6 +46,27 @@ final class Output {
 	const RANK_MATH_KEY = 'GatherPressEvent';
 
 	/**
+	 * The priority of the standalone JSON-LD on `wp_head`.
+	 *
+	 * Yoast SEO and Rank Math build their schema on `wp_head` at priority 1,
+	 * so by this priority the plugin knows whether one of them took the Event.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @var int
+	 */
+	const PRINT_PRIORITY = 99;
+
+	/**
+	 * Whether an SEO plugin's schema on this request has the Event.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @var bool
+	 */
+	private bool $handled = false;
+
+	/**
 	 * Constructor for the Output class.
 	 *
 	 * @since 0.1.0
@@ -58,9 +83,32 @@ final class Output {
 	 * @return void
 	 */
 	protected function setup_hooks(): void {
+		add_action( 'wp', array( $this, 'reset' ) );
 		add_filter( 'wpseo_schema_graph', array( $this, 'add_to_yoast_graph' ), 10, 2 );
 		add_filter( 'rank_math/json_ld', array( $this, 'add_to_rank_math' ), 99 );
-		add_action( 'wp_head', array( $this, 'print_json_ld' ) );
+		add_action( 'wp_head', array( $this, 'print_json_ld' ), self::PRINT_PRIORITY );
+	}
+
+	/**
+	 * Forgets whether an SEO plugin took the Event, at the start of a request.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @return void
+	 */
+	public function reset(): void {
+		$this->handled = false;
+	}
+
+	/**
+	 * Whether an SEO plugin's schema on this request has the Event.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @return bool Whether the Event is handled.
+	 */
+	public function is_handled(): bool {
+		return $this->handled;
 	}
 
 	/**
@@ -81,6 +129,38 @@ final class Output {
 	}
 
 	/**
+	 * Whether a list of schema nodes already has an event.
+	 *
+	 * An event is a node of the type `Event` or of one of its subtypes, such
+	 * as `MusicEvent` or `Festival`. A page that has one, for example from an
+	 * Event schema set up in the SEO plugin, gets no second one.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @param array<int|string, mixed> $nodes The schema nodes.
+	 *
+	 * @return bool Whether one of the nodes is an event.
+	 */
+	public function has_event( array $nodes ): bool {
+		foreach ( $nodes as $node ) {
+			if ( ! is_array( $node ) || ! isset( $node['@type'] ) ) {
+				continue;
+			}
+
+			foreach ( (array) $node['@type'] as $type ) {
+				if (
+					is_string( $type )
+					&& ( str_ends_with( $type, 'Event' ) || in_array( $type, array( 'Festival', 'Hackathon' ), true ) )
+				) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Adds the Event to Yoast SEO's schema graph.
 	 *
 	 * The Event is the main entity of Yoast's WebPage piece.
@@ -93,9 +173,20 @@ final class Output {
 	 * @return mixed The schema pieces.
 	 */
 	public function add_to_yoast_graph( $graph, $context = null ) {
+		if ( ! is_array( $graph ) ) {
+			return $graph;
+		}
+
 		$event = $this->get_current_event();
 
-		if ( ! is_array( $graph ) || empty( $event ) ) {
+		if ( empty( $event ) ) {
+			return $graph;
+		}
+
+		// The graph has the page's Event either way, so the plugin prints none of its own.
+		$this->handled = true;
+
+		if ( $this->has_event( $graph ) ) {
 			return $graph;
 		}
 
@@ -120,9 +211,20 @@ final class Output {
 	 * @return mixed Rank Math's JSON-LD data.
 	 */
 	public function add_to_rank_math( $data ) {
+		if ( ! is_array( $data ) ) {
+			return $data;
+		}
+
 		$event = $this->get_current_event();
 
-		if ( ! is_array( $data ) || empty( $event ) ) {
+		if ( empty( $event ) ) {
+			return $data;
+		}
+
+		// The data has the page's Event either way, so the plugin prints none of its own.
+		$this->handled = true;
+
+		if ( $this->has_event( $data ) ) {
 			return $data;
 		}
 
@@ -138,28 +240,25 @@ final class Output {
 	/**
 	 * Whether the plugin prints its own JSON-LD.
 	 *
-	 * It does when no SEO plugin that it joins is active.
+	 * It does when no SEO plugin's schema on this page took the Event.
 	 *
 	 * @since 0.1.0
 	 *
 	 * @return bool Whether to print the JSON-LD.
 	 */
 	public function should_print_json_ld(): bool {
-		$has_seo_plugin = defined( 'WPSEO_VERSION' ) || defined( 'RANK_MATH_VERSION' );
-
 		/**
 		 * Filters whether GatherPress Schema prints its own JSON-LD.
 		 *
-		 * By default it does when neither Yoast SEO nor Rank Math is active.
-		 * Return false when another plugin already outputs the Event, or
-		 * true to print it next to an SEO plugin that this plugin does not
-		 * join.
+		 * By default it does when neither the Yoast SEO graph nor the Rank Math
+		 * JSON-LD on the page took the Event. Return false when another plugin,
+		 * such as another SEO plugin, already outputs the Event.
 		 *
 		 * @since 0.1.0
 		 *
 		 * @param bool $print Whether to print the JSON-LD.
 		 */
-		return (bool) apply_filters( 'gatherpress_schema_print_json_ld', ! $has_seo_plugin );
+		return (bool) apply_filters( 'gatherpress_schema_print_json_ld', ! $this->handled );
 	}
 
 	/**

@@ -44,14 +44,41 @@ final class Event_Schema {
 	/**
 	 * Country codes where the house number comes before the street.
 	 *
-	 * In most other countries it comes after the street. A site can change the
+	 * In most other countries it comes after the street. Japan is here for
+	 * addresses in Latin letters, such as "1-2-3 Jinnan". A site can change the
 	 * result with the `gatherpress_schema_street_address` filter.
 	 *
 	 * @since 0.1.0
 	 *
 	 * @var string[]
 	 */
-	const HOUSE_NUMBER_FIRST = array( 'au', 'ca', 'gb', 'ie', 'in', 'my', 'nz', 'ph', 'sg', 'us', 'za' );
+	const HOUSE_NUMBER_FIRST = array(
+		'au',
+		'ca',
+		'fr',
+		'gb',
+		'hk',
+		'ie',
+		'in',
+		'jp',
+		'lu',
+		'mc',
+		'my',
+		'nz',
+		'ph',
+		'sg',
+		'us',
+		'za',
+	);
+
+	/**
+	 * The schema.org EventStatusType of an event that moved online.
+	 *
+	 * @since 0.1.0
+	 *
+	 * @var string
+	 */
+	const MOVED_ONLINE = 'EventMovedOnline';
 
 	/**
 	 * Constructor for the Event_Schema class.
@@ -103,9 +130,10 @@ final class Event_Schema {
 			$data['endDate'] = $end;
 		}
 
-		$data['eventStatus'] = self::SCHEMA_ORG . $this->get_status( $post->ID );
+		$status              = $this->get_status( $post->ID );
+		$data['eventStatus'] = self::SCHEMA_ORG . $status;
 
-		$data = array_merge( $data, $this->get_location( $event, $url ) );
+		$data = array_merge( $data, $this->get_location( $event, $url, self::MOVED_ONLINE === $status ) );
 
 		$description = $this->get_description( $post );
 
@@ -179,47 +207,47 @@ final class Event_Schema {
 	/**
 	 * Returns the location and the attendance mode of an event.
 	 *
-	 * A venue gives a `Place`. An online event gives a `VirtualLocation` with
-	 * the event page as its URL, because the link to join is only for
-	 * attendees. An event with both is a mixed event.
+	 * A venue gives a `Place`, and the offline attendance mode. An event that
+	 * is also online keeps the `Place` as its location and gets the mixed
+	 * attendance mode: Google requires an address on the location of an
+	 * event, and a `VirtualLocation` has none.
+	 *
+	 * An event that is only online, or that moved online, gives a
+	 * `VirtualLocation` with the event page as its URL, because the link to
+	 * join is only for attendees. Google shows no rich result for such an
+	 * event, but the data stays correct for other consumers.
 	 *
 	 * @since 0.1.0
 	 *
-	 * @param Event  $event The event.
-	 * @param string $url   The URL of the event page.
+	 * @param Event  $event        The event.
+	 * @param string $url          The URL of the event page.
+	 * @param bool   $moved_online Whether the event moved online.
 	 *
 	 * @return array<string, mixed> The `location` and `eventAttendanceMode` properties, or an empty array.
 	 */
-	public function get_location( Event $event, string $url ): array {
-		$locations = array();
-		$place     = $this->get_place( $event->get_public_venue_information() );
+	public function get_location( Event $event, string $url, bool $moved_online = false ): array {
+		$online = $moved_online || $event->is_online();
+		$place  = $moved_online ? array() : $this->get_place( $event->get_public_venue_information() );
 
 		if ( ! empty( $place ) ) {
-			$locations[] = $place;
-		}
+			$mode = $online ? 'MixedEventAttendanceMode' : 'OfflineEventAttendanceMode';
 
-		if ( $event->is_online() ) {
-			$locations[] = array(
-				'@type' => 'VirtualLocation',
-				'url'   => $url,
+			return array(
+				'eventAttendanceMode' => self::SCHEMA_ORG . $mode,
+				'location'            => $place,
 			);
 		}
 
-		if ( empty( $locations ) ) {
+		if ( ! $online ) {
 			return array();
 		}
 
-		if ( 2 === count( $locations ) ) {
-			$mode = 'MixedEventAttendanceMode';
-		} elseif ( 'VirtualLocation' === $locations[0]['@type'] ) {
-			$mode = 'OnlineEventAttendanceMode';
-		} else {
-			$mode = 'OfflineEventAttendanceMode';
-		}
-
 		return array(
-			'eventAttendanceMode' => self::SCHEMA_ORG . $mode,
-			'location'            => 1 === count( $locations ) ? $locations[0] : $locations,
+			'eventAttendanceMode' => self::SCHEMA_ORG . 'OnlineEventAttendanceMode',
+			'location'            => array(
+				'@type' => 'VirtualLocation',
+				'url'   => $url,
+			),
 		);
 	}
 
@@ -316,6 +344,12 @@ final class Event_Schema {
 	/**
 	 * Returns the street address of a venue.
 	 *
+	 * The street and the house number make the street address. Without a
+	 * street, the whole typed address is the street address. So it is when
+	 * the street has no letters: in a country without street names, such as
+	 * Japan, the address autocomplete can put a block number in the street,
+	 * and "3 21" would say nothing.
+	 *
 	 * @since 0.1.0
 	 *
 	 * @param array<string, string> $venue The venue information from GatherPress.
@@ -326,7 +360,7 @@ final class Event_Schema {
 		$street       = trim( $venue['street'] ?? '' );
 		$house_number = trim( $venue['house_number'] ?? '' );
 
-		if ( '' === $street ) {
+		if ( ! preg_match( '/\p{L}/u', $street ) ) {
 			$street_address = trim( $venue['address'] ?? '' );
 		} elseif ( '' === $house_number ) {
 			$street_address = $street;

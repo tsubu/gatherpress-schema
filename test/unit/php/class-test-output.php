@@ -71,11 +71,40 @@ final class Test_Output extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function test_setup_hooks(): void {
-		$instance = Output::get_instance();
+		// The plugin built its instance before the tests started, so build another one here.
+		$reflection = new \ReflectionClass( Output::class );
+		$instance   = $reflection->newInstanceWithoutConstructor();
+		$reflection->getConstructor()->invoke( $instance );
 
+		$this->assertSame( 10, has_action( 'wp', array( $instance, 'reset' ) ) );
 		$this->assertSame( 10, has_filter( 'wpseo_schema_graph', array( $instance, 'add_to_yoast_graph' ) ) );
 		$this->assertSame( 99, has_filter( 'rank_math/json_ld', array( $instance, 'add_to_rank_math' ) ) );
-		$this->assertSame( 10, has_action( 'wp_head', array( $instance, 'print_json_ld' ) ) );
+		$this->assertSame(
+			Output::PRINT_PRIORITY,
+			has_action( 'wp_head', array( $instance, 'print_json_ld' ) ),
+			'Failed to assert the JSON-LD prints after the SEO plugins build their schema.'
+		);
+	}
+
+	/**
+	 * Each request starts with the Event not handled.
+	 *
+	 * @covers ::reset
+	 * @covers ::is_handled
+	 *
+	 * @return void
+	 */
+	public function test_reset(): void {
+		$instance = Output::get_instance();
+
+		$this->go_to_event();
+		$instance->add_to_rank_math( array() );
+
+		$this->assertTrue( $instance->is_handled() );
+
+		$this->go_to( home_url( '/' ) );
+
+		$this->assertFalse( $instance->is_handled(), 'Failed to assert a new request resets the state.' );
 	}
 
 	/**
@@ -122,15 +151,18 @@ final class Test_Output extends WP_UnitTestCase {
 			$instance->add_to_yoast_graph( array( $webpage ) ),
 			'Failed to assert the home page graph is unchanged.'
 		);
+		$this->assertFalse( $instance->is_handled(), 'Failed to assert the home page has nothing to handle.' );
 
 		$this->go_to_event();
 
 		$this->assertSame( 'not-a-graph', $instance->add_to_yoast_graph( 'not-a-graph' ) );
+		$this->assertFalse( $instance->is_handled(), 'Failed to assert a graph that is not an array takes nothing.' );
 
 		$context                 = new \stdClass();
 		$context->main_schema_id = 'https://example.com/event/meetup/';
 		$graph                   = $instance->add_to_yoast_graph( array( $webpage ), $context );
 
+		$this->assertTrue( $instance->is_handled(), 'Failed to assert the graph took the Event.' );
 		$this->assertCount( 2, $graph );
 		$this->assertSame( 'Event', $graph[1]['@type'] );
 		$this->assertSame( array( '@id' => 'https://example.com/event/meetup/' ), $graph[1]['mainEntityOfPage'] );
@@ -142,6 +174,51 @@ final class Test_Output extends WP_UnitTestCase {
 			$graph[1],
 			'Failed to assert no context gives no main entity link.'
 		);
+
+		$this->go_to_event();
+
+		$with_event = array( $webpage, array( '@type' => array( 'Thing', 'MusicEvent' ) ) );
+
+		$this->assertSame(
+			$with_event,
+			$instance->add_to_yoast_graph( $with_event ),
+			'Failed to assert a graph with an event gets no second one.'
+		);
+		$this->assertTrue(
+			$instance->is_handled(),
+			'Failed to assert a graph with its own event leaves no JSON-LD to print.'
+		);
+	}
+
+	/**
+	 * Event types and their subtypes count as events, other types do not.
+	 *
+	 * @covers ::has_event
+	 *
+	 * @return void
+	 */
+	public function test_has_event(): void {
+		$instance = Output::get_instance();
+
+		$this->assertFalse( $instance->has_event( array() ) );
+		$this->assertFalse(
+			$instance->has_event(
+				array(
+					'not-a-node',
+					array( 'name' => 'No type' ),
+					array( '@type' => 'WebPage' ),
+					array( '@type' => array( 'WebPage', 3 ) ),
+					array( '@type' => 'EventReservation' ),
+				)
+			)
+		);
+
+		foreach ( array( 'Event', 'SocialEvent', 'Festival', 'Hackathon' ) as $type ) {
+			$this->assertTrue(
+				$instance->has_event( array( 'key' => array( '@type' => $type ) ) ),
+				"Failed to assert {$type} is an event."
+			);
+		}
 	}
 
 	/**
@@ -183,10 +260,19 @@ final class Test_Output extends WP_UnitTestCase {
 		$result = $instance->add_to_rank_math( array() );
 
 		$this->assertArrayNotHasKey( 'mainEntityOfPage', $result[ Output::RANK_MATH_KEY ] );
+
+		$with_event = array_merge( $data, array( 'Event' => array( '@type' => 'Event' ) ) );
+
+		$this->assertSame(
+			$with_event,
+			$instance->add_to_rank_math( $with_event ),
+			'Failed to assert data with an event gets no second one.'
+		);
 	}
 
 	/**
-	 * Without an SEO plugin the JSON-LD prints, and a filter can stop it.
+	 * The JSON-LD prints unless an SEO plugin's schema took the Event, and a
+	 * filter can stop it.
 	 *
 	 * @covers ::should_print_json_ld
 	 *
@@ -195,6 +281,8 @@ final class Test_Output extends WP_UnitTestCase {
 	public function test_should_print_json_ld(): void {
 		$instance = Output::get_instance();
 
+		$this->go_to_event();
+
 		$this->assertTrue( $instance->should_print_json_ld() );
 
 		add_filter( 'gatherpress_schema_print_json_ld', '__return_false' );
@@ -202,6 +290,13 @@ final class Test_Output extends WP_UnitTestCase {
 		remove_filter( 'gatherpress_schema_print_json_ld', '__return_false' );
 
 		$this->assertFalse( $print );
+
+		$instance->add_to_rank_math( array() );
+
+		$this->assertFalse(
+			$instance->should_print_json_ld(),
+			'Failed to assert the JSON-LD does not print when Rank Math took the Event.'
+		);
 	}
 
 	/**

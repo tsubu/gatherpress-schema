@@ -15,8 +15,8 @@ Adds schema.org Event structured data to GatherPress events, inside the Yoast SE
 GatherPress Schema is a companion plugin for GatherPress. It describes each event as a schema.org Event, so search engines can show its date, place and status.
 
 * Built from the GatherPress data model: the event dates and time zone, the venue address and coordinates, online events, and the event status.
-* With Yoast SEO or Rank Math, the Event joins their structured data, so a page never has two competing Events.
-* With neither, the plugin prints the Event as JSON-LD.
+* When Yoast SEO or Rank Math outputs structured data, the Event joins it, so a page never has two competing Events.
+* Otherwise, for example before the Rank Math setup wizard, the plugin prints the Event as JSON-LD.
 * Works for every post type that supports GatherPress event dates.
 * Leaves out drafts, password-protected events and venues, and the link to join an online event.
 * Requires GatherPress 0.36.1 or later. Event statuses need GatherPress 0.37.0 or later.

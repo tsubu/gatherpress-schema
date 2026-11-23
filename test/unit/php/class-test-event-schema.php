@@ -137,6 +137,8 @@ final class Test_Event_Schema extends WP_UnitTestCase {
 	 *
 	 * @covers ::get_event
 	 * @covers ::get_status
+	 * @covers ::get_description
+	 * @covers ::plain_text
 	 *
 	 * @return void
 	 */
@@ -190,6 +192,7 @@ final class Test_Event_Schema extends WP_UnitTestCase {
 	 *
 	 * @covers ::get_event
 	 * @covers ::get_description
+	 * @covers ::plain_text
 	 *
 	 * @return void
 	 */
@@ -291,7 +294,7 @@ final class Test_Event_Schema extends WP_UnitTestCase {
 
 	/**
 	 * An online event gives a VirtualLocation at the event page, and an
-	 * online event at a venue is a mixed event.
+	 * online event at a venue is a mixed event at the Place.
 	 *
 	 * @covers ::get_location
 	 *
@@ -320,9 +323,62 @@ final class Test_Event_Schema extends WP_UnitTestCase {
 		$event = Event_Schema::get_instance()->get_event( $event_id );
 
 		$this->assertSame( 'https://schema.org/MixedEventAttendanceMode', $event['eventAttendanceMode'] );
-		$this->assertCount( 2, $event['location'] );
-		$this->assertSame( 'Place', $event['location'][0]['@type'] );
-		$this->assertSame( 'VirtualLocation', $event['location'][1]['@type'] );
+		$this->assertSame(
+			'Place',
+			$event['location']['@type'],
+			'Failed to assert a mixed event keeps the Place, which has the address that Google requires.'
+		);
+	}
+
+	/**
+	 * An event that moved online gives the VirtualLocation alone, even at a
+	 * venue and without an online link.
+	 *
+	 * @covers ::get_location
+	 *
+	 * @return void
+	 */
+	public function test_get_location_moved_online(): void {
+		$event_id = $this->create_event();
+		$url      = get_permalink( $event_id );
+
+		$this->create_venue( $event_id, array( 'address' => 'Main Street 1' ) );
+
+		$this->assertSame(
+			array(
+				'eventAttendanceMode' => 'https://schema.org/OnlineEventAttendanceMode',
+				'location'            => array(
+					'@type' => 'VirtualLocation',
+					'url'   => $url,
+				),
+			),
+			Event_Schema::get_instance()->get_location( new Event( $event_id ), $url, true )
+		);
+	}
+
+	/**
+	 * The Moved online status of GatherPress gives the moved online Event.
+	 *
+	 * @covers ::get_event
+	 * @covers ::get_status
+	 *
+	 * @return void
+	 */
+	public function test_get_event_moved_online(): void {
+		if ( ! class_exists( Status::class ) ) {
+			$this->markTestSkipped( 'This GatherPress has no event statuses.' );
+		}
+
+		$event_id = $this->create_event();
+
+		$this->create_venue( $event_id, array( 'address' => 'Main Street 1' ) );
+		( new Status( $event_id ) )->set( 'moved-online' );
+
+		$event = Event_Schema::get_instance()->get_event( $event_id );
+
+		$this->assertSame( 'https://schema.org/EventMovedOnline', $event['eventStatus'] );
+		$this->assertSame( 'https://schema.org/OnlineEventAttendanceMode', $event['eventAttendanceMode'] );
+		$this->assertSame( 'VirtualLocation', $event['location']['@type'] );
 	}
 
 	/**
@@ -445,6 +501,39 @@ final class Test_Event_Schema extends WP_UnitTestCase {
 				)
 			)
 		);
+		$this->assertSame(
+			'1-2-3 Jinnan',
+			$instance->get_street_address(
+				array(
+					'street'       => 'Jinnan',
+					'house_number' => '1-2-3',
+					'country_code' => 'jp',
+				)
+			)
+		);
+		$this->assertSame(
+			'1-2-3 Jinnan, Shibuya, Tokyo 150-0041, Japan',
+			$instance->get_street_address(
+				array(
+					'address'      => '1-2-3 Jinnan, Shibuya, Tokyo 150-0041, Japan',
+					'street'       => '21',
+					'house_number' => '3',
+					'country_code' => 'JP',
+				)
+			),
+			'Failed to assert a street without letters, such as a Japanese block number, gives the typed address.'
+		);
+		$this->assertSame(
+			'Calle 5 7',
+			$instance->get_street_address(
+				array(
+					'street'       => 'Calle 5',
+					'house_number' => '7',
+				)
+			),
+			'Failed to assert a street with letters and digits is a street.'
+		);
+		$this->assertSame( '神南', $instance->get_street_address( array( 'street' => '神南' ) ) );
 		$this->assertSame( 'Hauptstraße', $instance->get_street_address( array( 'street' => 'Hauptstraße' ) ) );
 		$this->assertSame(
 			'1-1 Chiyoda, Tokyo',

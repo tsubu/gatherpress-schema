@@ -36,6 +36,9 @@ final class Test_Plugin extends WP_UnitTestCase {
 	 */
 	public function test_boots(): void {
 		$this->assertArrayHasKey( 'GatherPress_Schema', \gatherpress_schema_autoloader( array() ) );
-		$this->assertSame( 10, has_action( 'wp_head', array( Output::get_instance(), 'print_json_ld' ) ) );
+		$this->assertSame(
+			Output::PRINT_PRIORITY,
+			has_action( 'wp_head', array( Output::get_instance(), 'print_json_ld' ) )
+		);
 	}
 }
